@@ -1,5 +1,5 @@
 name: juicefs
-version: 1.1.0
+version: 1.1.1
 summary: Distributed POSIX file system built on top of Redis and S3.
 description: |
   JuiceFS is a high-performance POSIX file system released
@@ -9,7 +9,7 @@ description: |
   the corresponding metadata can be persisted in various
   compatible database engines such as Redis, MySQL, and
   TiKV based on the scenarios and requirements.
-confinement: classic
+confinement: strict
 base: core22
 grade: stable
 architectures:
@@ -20,12 +20,19 @@ architectures:
 parts:
   juicefs:
     source: https://github.com/juicedata/juicefs.git
-    source-tag: v1.1.0
+    source-tag: v1.1.1
     plugin: make
     build-snaps: [go]
     override-build: |
       make
       cp $SNAPCRAFT_PART_BUILD/juicefs $SNAPCRAFT_PART_INSTALL
+layout:
+  /var/jfsCache:
+    bind: $SNAP/var/jfsCache
 apps:
   juicefs:
     command: juicefs
+    plugs:
+      - network
+      - fuse-support
+      - mount-observe
