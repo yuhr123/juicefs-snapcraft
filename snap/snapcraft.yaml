@@ -1,5 +1,5 @@
 name: juicefs
-version: 1.1.1-1
+version: 1.1.1-2
 summary: Distributed POSIX file system built on top of Redis and S3.
 description: |
   JuiceFS is a high-performance POSIX file system released
@@ -44,5 +44,3 @@ apps:
       - mntctl
       - network
       - network-bind
-      - mount-control
-      - mount-observ
