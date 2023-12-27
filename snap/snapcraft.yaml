@@ -29,10 +29,20 @@ parts:
 layout:
   /var/jfsCache:
     bind: $SNAP/var/jfsCache
+plugs:
+  mntctl:
+    interface: mount-control
+    mount:
+      - what: /*
+        where: /*
+        type: [fuse]
+        options: [rw]
 apps:
   juicefs:
     command: juicefs
     plugs:
+      - mntctl
       - network
-      - fuse-support
-      - mount-observe
+      - network-bind
+      - mount-control
+      - mount-observ
