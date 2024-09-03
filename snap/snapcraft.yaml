@@ -22,7 +22,7 @@ parts:
     source: https://github.com/juicedata/juicefs.git
     source-tag: v1.2.1
     plugin: make
-    build-snaps: [go/1.20]
+    build-snaps: [go/1.20/stable]
     override-build: |
       go mod download
       go mod tidy
