@@ -1,5 +1,5 @@
 name: juicefs
-version: 1.2.2
+version: 1.2.3
 summary: Distributed POSIX file system built on top of Redis and S3.
 description: |
   JuiceFS is a high-performance POSIX file system released
@@ -20,7 +20,7 @@ architectures:
 parts:
   juicefs:
     source: https://github.com/juicedata/juicefs.git
-    source-tag: v1.2.2
+    source-tag: v1.2.3
     plugin: make
     build-snaps: [go/1.20/stable]
     override-build: |
