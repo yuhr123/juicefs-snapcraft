@@ -20,7 +20,7 @@ architectures:
 parts:
   juicefs:
     source: https://github.com/juicedata/juicefs.git
-    source-tag: v1.4.0
+    source-tag: v1.4.1
     plugin: make
     build-snaps: [go/1.25/stable]
     override-build: |
