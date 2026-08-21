@@ -23,6 +23,7 @@ SOURCE_TAG_LINE = re.compile(
     r"^(\s+)source-tag:\s*([^\s#]+)(?:\s+#.*)?$", re.MULTILINE
 )
 RELEASE_API = "https://api.github.com/repos/juicedata/juicefs/releases/tags/v{version}"
+MAX_VERSION_RESPONSE_BYTES = 256
 
 
 class ReleaseError(RuntimeError):
@@ -59,11 +60,15 @@ def fetch_text(
     )
     try:
         with opener(request, timeout=30) as response:
-            raw = response.read()
+            raw = response.read(MAX_VERSION_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
         raise ReleaseError(f"version endpoint returned HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ReleaseError(f"version endpoint request failed: {exc}") from exc
+    if len(raw) > MAX_VERSION_RESPONSE_BYTES:
+        raise ReleaseError(
+            f"version endpoint response exceeds {MAX_VERSION_RESPONSE_BYTES} bytes"
+        )
     try:
         return raw.decode("utf-8").strip()
     except UnicodeDecodeError as exc:

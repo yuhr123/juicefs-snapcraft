@@ -1,13 +1,36 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import release
 
 
+class Response(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
 class ReleaseTest(unittest.TestCase):
+    def test_fetch_text_rejects_an_oversized_response(self):
+        opener = mock.Mock(
+            return_value=Response(b"1" * (release.MAX_VERSION_RESPONSE_BYTES + 1))
+        )
+        with self.assertRaisesRegex(release.ReleaseError, "exceeds"):
+            release.fetch_text("https://example.invalid/version", opener)
+
+    def test_fetch_text_strips_a_small_utf8_response(self):
+        opener = mock.Mock(return_value=Response(b" 1.4.2\n"))
+        self.assertEqual(
+            release.fetch_text("https://example.invalid/version", opener), "1.4.2"
+        )
+
     def test_plan_requires_newer_unmarked_version(self):
         plan = release.make_plan(
             "1.4.2", ["1.4.1"], "1.4.1", "automation/released/v", False
