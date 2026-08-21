@@ -1,0 +1,262 @@
+name: Snap Release Automation
+
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: Validate release detection without changing the recipe or Store
+        required: true
+        default: false
+        type: boolean
+      version_override:
+        description: Version used only with check_only
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: snap-release-automation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERSION_URL: https://d.juicefs.com/juicefs/releases/latest-version.txt
+  BASELINE_VERSION: "1.4.1"
+  RELEASE_TAG_PREFIX: automation/released/v
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  detect:
+    name: Detect Snap release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      previous_version: ${{ steps.plan.outputs.previous_version }}
+      marker_tag: ${{ steps.plan.outputs.marker_tag }}
+      should_release: ${{ steps.plan.outputs.should_release }}
+      reason: ${{ steps.plan.outputs.reason }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate execution ref
+        env:
+          CHECK_ONLY: ${{ inputs.check_only }}
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: |
+          set -euo pipefail
+          if [[ "$CHECK_ONLY" != "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "real releases must run from main" >&2
+            exit 1
+          fi
+          if [[ -n "$VERSION_OVERRIDE" && "$CHECK_ONLY" != "true" ]]; then
+            echo "version_override is allowed only with check_only" >&2
+            exit 1
+          fi
+
+      - name: Plan and validate release
+        id: plan
+        env:
+          CHECK_ONLY: ${{ inputs.check_only }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: |
+          set -euo pipefail
+          args=(
+            plan
+            --version-url "$VERSION_URL"
+            --baseline-version "$BASELINE_VERSION"
+            --tag-prefix "$RELEASE_TAG_PREFIX"
+            --github-token "$GH_TOKEN"
+            --output-file "$GITHUB_OUTPUT"
+          )
+          if [[ "$CHECK_ONLY" == "true" ]]; then
+            args+=(--check-only)
+          fi
+          if [[ -n "$VERSION_OVERRIDE" ]]; then
+            args+=(--version-override "$VERSION_OVERRIDE")
+          fi
+          python3 -m scripts.release "${args[@]}"
+
+      - name: Summarize release plan
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          PREVIOUS_VERSION: ${{ steps.plan.outputs.previous_version }}
+          MARKER_TAG: ${{ steps.plan.outputs.marker_tag }}
+          SHOULD_RELEASE: ${{ steps.plan.outputs.should_release }}
+          REASON: ${{ steps.plan.outputs.reason }}
+        run: |
+          {
+            echo "## Snap release plan"
+            echo
+            echo "- Candidate: \`$VERSION\`"
+            echo "- Last completed: \`$PREVIOUS_VERSION\`"
+            echo "- Completion marker: \`$MARKER_TAG\`"
+            echo "- Should release: \`$SHOULD_RELEASE\`"
+            echo "- Reason: $REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish Snap ${{ needs.detect.outputs.version }}
+    needs: detect
+    if: ${{ needs.detect.outputs.should_release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment:
+      name: snapcraft-release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout current main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Update Snapcraft recipe
+        id: recipe
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python3 -m scripts.release update-recipe \
+            --recipe snap/snapcraft.yaml \
+            --version "$VERSION" \
+            --output-file "$GITHUB_OUTPUT"
+
+      - name: Commit recipe update
+        if: ${{ steps.recipe.outputs.changed == 'true' }}
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "JuiceFS Release Bot"
+          git config user.email "team@juicefs.io"
+          git add -- snap/snapcraft.yaml
+          git commit -m "release: JuiceFS v$VERSION"
+          git push origin HEAD:main
+
+      - name: Wait for amd64 and arm64 edge revisions
+        id: edge
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          python3 -m scripts.snap_store \
+            --version "$VERSION" \
+            --risk edge \
+            --architecture amd64 \
+            --architecture arm64 \
+            --timeout 7200 \
+            --interval 60 \
+            --output-file "$GITHUB_OUTPUT"
+
+      - name: Smoke test latest/edge
+        env:
+          AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo snap install juicefs --channel=latest/edge
+          actual_version="$(juicefs version 2>&1)"
+          actual_revision="$(snap list juicefs | awk 'NR == 2 { print $3 }')"
+          echo "$actual_version"
+          grep --fixed-strings "$VERSION" <<<"$actual_version"
+          if [[ "$actual_revision" != "$AMD64_REVISION" ]]; then
+            echo "Expected installed revision $AMD64_REVISION, got $actual_revision" >&2
+            exit 1
+          fi
+
+      - name: Install Snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Verify Snap Store credentials
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: snapcraft whoami
+
+      - name: Recheck edge build set before promotion
+        env:
+          AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
+          ARM64_REVISION: ${{ steps.edge.outputs.arm64_revision }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          python3 -m scripts.snap_store \
+            --version "$VERSION" \
+            --risk edge \
+            --architecture amd64 \
+            --architecture arm64 \
+            --expected-revision "amd64=$AMD64_REVISION" \
+            --expected-revision "arm64=$ARM64_REVISION" \
+            --timeout 0
+
+      - name: Promote verified edge build set to stable
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          snapcraft promote juicefs \
+            --from-channel latest/edge \
+            --to-channel latest/stable \
+            --yes
+
+      - name: Verify exact stable revisions
+        env:
+          AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
+          ARM64_REVISION: ${{ steps.edge.outputs.arm64_revision }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          python3 -m scripts.snap_store \
+            --version "$VERSION" \
+            --risk stable \
+            --architecture amd64 \
+            --architecture arm64 \
+            --expected-revision "amd64=$AMD64_REVISION" \
+            --expected-revision "arm64=$ARM64_REVISION" \
+            --timeout 600 \
+            --interval 15
+
+      - name: Create completion marker
+        env:
+          MARKER_TAG: ${{ needs.detect.outputs.marker_tag }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin \
+            "refs/tags/$MARKER_TAG" >/dev/null 2>&1; then
+            echo "$MARKER_TAG already exists"
+            exit 0
+          fi
+          git config user.name "JuiceFS Release Bot"
+          git config user.email "team@juicefs.io"
+          git tag -a "$MARKER_TAG" HEAD \
+            -m "JuiceFS Snap v$VERSION released by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin "refs/tags/$MARKER_TAG"
+
+      - name: Summarize completed release
+        env:
+          AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
+          ARM64_REVISION: ${{ steps.edge.outputs.arm64_revision }}
+          MARKER_TAG: ${{ needs.detect.outputs.marker_tag }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          {
+            echo "## Snap release completed"
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- amd64 revision: \`$AMD64_REVISION\`"
+            echo "- arm64 revision: \`$ARM64_REVISION\`"
+            echo "- Stable channel: \`latest/stable\`"
+            echo "- Completion marker: \`$MARKER_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
