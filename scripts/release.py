@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import re
 import subprocess
 import sys
@@ -58,7 +59,7 @@ def fetch_text(
     )
     try:
         with opener(request, timeout=30) as response:
-            raw = response.read(256)
+            raw = response.read()
     except urllib.error.HTTPError as exc:
         raise ReleaseError(f"version endpoint returned HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
@@ -217,7 +218,7 @@ def plan_command(args: argparse.Namespace) -> None:
         args.tag_prefix,
         args.check_only,
     )
-    fetch_release(plan.version, args.github_token)
+    fetch_release(plan.version, os.environ.get("GH_TOKEN", ""))
     if args.output_file:
         write_outputs(
             args.output_file,
@@ -251,7 +252,6 @@ def make_parser() -> argparse.ArgumentParser:
     plan.add_argument("--tag-prefix", required=True)
     plan.add_argument("--remote", default="origin")
     plan.add_argument("--check-only", action="store_true")
-    plan.add_argument("--github-token", default="")
     plan.add_argument("--output-file")
     plan.set_defaults(handler=plan_command)
 
