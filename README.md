@@ -4,8 +4,8 @@ Build and publish the JuiceFS Snap package.
 
 ## Automated release flow
 
-The `Snap Release Automation` GitHub Actions workflow checks the authoritative
-JuiceFS version endpoint every six hours. For a new stable upstream release it:
+The `Snap Release Automation` GitHub Actions workflow checks the upstream
+GitHub Latest Release every six hours. For a new stable upstream release it:
 
 1. validates the version, GitHub release, release baseline, and completion tags;
 2. updates both `version` and `parts.juicefs.source-tag` in
@@ -81,9 +81,11 @@ supports:
 - `check_only=true` to validate detection without changing GitHub or the Store;
 - `version_override=X.Y.Z` to inspect a specific version in check-only mode.
 
-Real releases always use
-`https://d.juicefs.com/juicefs/releases/latest-version.txt`; an override cannot
-be used to publish.
+Real releases always use the `tag_name` from
+`https://api.github.com/repos/juicedata/juicefs/releases/latest`; an override
+cannot be used to publish. The response must be a non-draft, non-prerelease
+release with a `vX.Y.Z` tag. GitHub's Latest designation determines the
+candidate; the workflow does not select the numerically highest release.
 
 If a run fails, fix the external condition and rerun it. Do not manually add the
 completion tag. Common resumable states are:

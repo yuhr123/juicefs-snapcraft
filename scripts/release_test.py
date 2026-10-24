@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -18,18 +20,48 @@ class Response(io.BytesIO):
 
 
 class ReleaseTest(unittest.TestCase):
-    def test_fetch_text_rejects_an_oversized_response(self):
-        opener = mock.Mock(
-            return_value=Response(b"1" * (release.MAX_VERSION_RESPONSE_BYTES + 1))
-        )
-        with self.assertRaisesRegex(release.ReleaseError, "exceeds"):
-            release.fetch_text("https://example.invalid/version", opener)
-
-    def test_fetch_text_strips_a_small_utf8_response(self):
-        opener = mock.Mock(return_value=Response(b" 1.4.2\n"))
+    def test_fetch_latest_version_uses_github_latest_and_token(self):
+        opener = mock.Mock(return_value=Response(json.dumps({
+            "tag_name": "v1.4.2", "draft": False, "prerelease": False
+        }).encode()))
         self.assertEqual(
-            release.fetch_text("https://example.invalid/version", opener), "1.4.2"
+            release.fetch_latest_version(release.LATEST_RELEASE_API, "token", opener),
+            "1.4.2",
         )
+        request = opener.call_args.args[0]
+        self.assertEqual(request.full_url, release.LATEST_RELEASE_API)
+        self.assertEqual(request.get_header("Accept"), "application/vnd.github+json")
+        self.assertEqual(request.get_header("Authorization"), "Bearer token")
+
+    def test_fetch_latest_version_rejects_invalid_responses(self):
+        valid = {"tag_name": "v1.4.2", "draft": False, "prerelease": False}
+        cases = [
+            (b"{broken", "lookup failed"),
+            (b"[]", "must be an object"),
+            (json.dumps({"tag_name": "v1.4.2", "prerelease": False}).encode(), "draft"),
+            (json.dumps({"tag_name": "v1.4.2", "draft": False}).encode(), "prerelease"),
+            (json.dumps({**valid, "draft": True}).encode(), "draft"),
+            (json.dumps({**valid, "prerelease": True}).encode(), "prerelease"),
+            (json.dumps({**valid, "draft": 0}).encode(), "draft"),
+            (json.dumps({**valid, "tag_name": "1.4.2"}).encode(), "tag"),
+            (json.dumps({**valid, "tag_name": "v1.4.2-rc1"}).encode(), "tag"),
+            (json.dumps({**valid, "tag_name": 142}).encode(), "tag"),
+        ]
+        for payload, error in cases:
+            with self.subTest(payload=payload), self.assertRaisesRegex(
+                release.ReleaseError, error
+            ):
+                release.fetch_latest_version(
+                    release.LATEST_RELEASE_API,
+                    opener=mock.Mock(return_value=Response(payload)),
+                )
+
+    def test_fetch_latest_version_reports_http_error(self):
+        error = urllib.error.HTTPError(release.LATEST_RELEASE_API, 403, "Forbidden", {}, None)
+        with self.assertRaisesRegex(release.ReleaseError, "HTTP 403"):
+            release.fetch_latest_version(
+                release.LATEST_RELEASE_API, opener=mock.Mock(side_effect=error)
+            )
 
     def test_plan_requires_newer_unmarked_version(self):
         plan = release.make_plan(

@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  VERSION_URL: https://d.juicefs.com/juicefs/releases/latest-version.txt
+  VERSION_URL: https://api.github.com/repos/juicedata/juicefs/releases/latest
   BASELINE_VERSION: "1.4.1"
   RELEASE_TAG_PREFIX: automation/released/v
 

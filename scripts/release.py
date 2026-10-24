@@ -23,7 +23,8 @@ SOURCE_TAG_LINE = re.compile(
     r"^(\s+)source-tag:\s*([^\s#]+)(?:\s+#.*)?$", re.MULTILINE
 )
 RELEASE_API = "https://api.github.com/repos/juicedata/juicefs/releases/tags/v{version}"
-MAX_VERSION_RESPONSE_BYTES = 256
+LATEST_RELEASE_API = "https://api.github.com/repos/juicedata/juicefs/releases/latest"
+RELEASE_TAG_PATTERN = re.compile(r"^v([0-9]+\.[0-9]+\.[0-9]+)$")
 
 
 class ReleaseError(RuntimeError):
@@ -51,28 +52,37 @@ def version_key(version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in validate_version(version).split("."))
 
 
-def fetch_text(
+def fetch_latest_version(
     url: str,
+    token: str = "",
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> str:
     request = urllib.request.Request(
-        url, headers={"User-Agent": "juicefs-snap-release-automation"}
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "juicefs-snap-release-automation",
+            "X-GitHub-Api-Version": "2022-11-28",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
+        },
     )
     try:
         with opener(request, timeout=30) as response:
-            raw = response.read(MAX_VERSION_RESPONSE_BYTES + 1)
+            payload = json.load(response)
     except urllib.error.HTTPError as exc:
-        raise ReleaseError(f"version endpoint returned HTTP {exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ReleaseError(f"version endpoint request failed: {exc}") from exc
-    if len(raw) > MAX_VERSION_RESPONSE_BYTES:
-        raise ReleaseError(
-            f"version endpoint response exceeds {MAX_VERSION_RESPONSE_BYTES} bytes"
-        )
-    try:
-        return raw.decode("utf-8").strip()
-    except UnicodeDecodeError as exc:
-        raise ReleaseError("version endpoint must return UTF-8 text") from exc
+        raise ReleaseError(f"GitHub latest release lookup failed with HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ReleaseError(f"GitHub latest release lookup failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ReleaseError("GitHub latest release response must be an object")
+    if payload.get("draft") is not False:
+        raise ReleaseError("GitHub latest release must not be a draft")
+    if payload.get("prerelease") is not False:
+        raise ReleaseError("GitHub latest release must not be a prerelease")
+    tag = payload.get("tag_name")
+    if not isinstance(tag, str) or not (match := RELEASE_TAG_PATTERN.fullmatch(tag)):
+        raise ReleaseError("GitHub latest release tag must be vX.Y.Z")
+    return validate_version(match.group(1))
 
 
 def fetch_release(
@@ -215,7 +225,9 @@ def update_recipe(path: Path, version: str) -> bool:
 def plan_command(args: argparse.Namespace) -> None:
     if args.version_override and not args.check_only:
         raise ReleaseError("version override is allowed only with --check-only")
-    candidate = args.version_override or validate_version(fetch_text(args.version_url))
+    candidate = args.version_override or fetch_latest_version(
+        args.version_url, os.environ.get("GH_TOKEN", "")
+    )
     plan = make_plan(
         candidate,
         list_completed_versions(args.remote, args.tag_prefix),
