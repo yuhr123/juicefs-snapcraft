@@ -63,6 +63,28 @@ class ReleaseTest(unittest.TestCase):
                 release.LATEST_RELEASE_API, opener=mock.Mock(side_effect=error)
             )
 
+    def test_plan_authenticates_only_the_upstream_latest_url(self):
+        for url, expected_token in (
+            (release.LATEST_RELEASE_API, "token"),
+            ("https://example.invalid/releases/latest", ""),
+        ):
+            with self.subTest(url=url), mock.patch.dict(
+                "os.environ", {"GH_TOKEN": "token"}
+            ), mock.patch.object(
+                release, "fetch_latest_version", return_value="1.4.2"
+            ) as latest, mock.patch.object(
+                release, "list_completed_versions", return_value=[]
+            ), mock.patch.object(release, "fetch_release") as by_tag, mock.patch(
+                "sys.stdout", new_callable=io.StringIO
+            ):
+                args = release.make_parser().parse_args([
+                    "plan", "--version-url", url, "--baseline-version", "1.4.1",
+                    "--tag-prefix", "automation/released/v",
+                ])
+                release.plan_command(args)
+                latest.assert_called_once_with(url, expected_token)
+                by_tag.assert_called_once_with("1.4.2", "token")
+
     def test_plan_requires_newer_unmarked_version(self):
         plan = release.make_plan(
             "1.4.2", ["1.4.1"], "1.4.1", "automation/released/v", False

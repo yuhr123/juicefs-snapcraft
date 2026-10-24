@@ -225,8 +225,9 @@ def update_recipe(path: Path, version: str) -> bool:
 def plan_command(args: argparse.Namespace) -> None:
     if args.version_override and not args.check_only:
         raise ReleaseError("version override is allowed only with --check-only")
+    token = os.environ.get("GH_TOKEN", "")
     candidate = args.version_override or fetch_latest_version(
-        args.version_url, os.environ.get("GH_TOKEN", "")
+        args.version_url, token if args.version_url == LATEST_RELEASE_API else ""
     )
     plan = make_plan(
         candidate,
@@ -235,7 +236,7 @@ def plan_command(args: argparse.Namespace) -> None:
         args.tag_prefix,
         args.check_only,
     )
-    fetch_release(plan.version, os.environ.get("GH_TOKEN", ""))
+    fetch_release(plan.version, token)
     if args.output_file:
         write_outputs(
             args.output_file,
