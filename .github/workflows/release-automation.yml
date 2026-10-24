@@ -27,6 +27,7 @@ env:
   VERSION_URL: https://api.github.com/repos/juicedata/juicefs/releases/latest
   BASELINE_VERSION: "1.4.1"
   RELEASE_TAG_PREFIX: automation/released/v
+  PYTHONUNBUFFERED: "1"
 
 defaults:
   run:
@@ -57,7 +58,7 @@ jobs:
 
       - name: Validate execution ref
         env:
-          CHECK_ONLY: ${{ inputs.check_only }}
+          CHECK_ONLY: ${{ github.event_name == 'schedule' || inputs.check_only }}
           VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
           set -euo pipefail
@@ -73,7 +74,7 @@ jobs:
       - name: Plan and validate release
         id: plan
         env:
-          CHECK_ONLY: ${{ inputs.check_only }}
+          CHECK_ONLY: ${{ github.event_name == 'schedule' || inputs.check_only }}
           GH_TOKEN: ${{ github.token }}
           VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
@@ -114,7 +115,7 @@ jobs:
   release:
     name: Publish Snap ${{ needs.detect.outputs.version }}
     needs: detect
-    if: ${{ needs.detect.outputs.should_release == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.detect.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment:
@@ -200,7 +201,7 @@ jobs:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: snapcraft whoami
 
-      - name: Recheck edge build set before promotion
+      - name: Recheck edge build set before stable release
         env:
           AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
           ARM64_REVISION: ${{ steps.edge.outputs.arm64_revision }}
@@ -216,24 +217,16 @@ jobs:
             --timeout 30 \
             --interval 5
 
-      - name: Promote verified edge build set to stable
+      - name: Release verified revisions to stable
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          AMD64_REVISION: ${{ steps.edge.outputs.amd64_revision }}
+          ARM64_REVISION: ${{ steps.edge.outputs.arm64_revision }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if snapcraft promote juicefs \
-              --from-channel latest/edge \
-              --to-channel latest/stable \
-              --yes; then
-              exit 0
-            fi
-            if [[ "$attempt" -lt 3 ]]; then
-              echo "Snap Store promotion attempt $attempt failed; retrying" >&2
-              sleep 30
-            fi
-          done
-          exit 1
+          python3 -m scripts.publish_stable \
+            --amd64-revision "$AMD64_REVISION" \
+            --arm64-revision "$ARM64_REVISION"
 
       - name: Verify exact stable revisions
         env:
