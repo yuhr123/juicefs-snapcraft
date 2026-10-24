@@ -22,10 +22,11 @@ then:
 6. verifies that stable points to the exact tested revisions; and
 7. creates an `automation/released/vX.Y.Z` completion tag.
 
-The workflow is resumable. Until the completion tag exists, rerun the manual
-workflow to continue the same release whether the recipe update, edge build,
-or one stable revision already completed. A scheduled run still only reports
-the release state.
+The workflow is resumable while the target remains upstream Latest. Until the
+completion tag exists, rerun the manual workflow to continue that release whether
+the recipe update, edge build, or one stable revision already completed. If a
+newer release becomes Latest, a new manual run targets that newer release. A
+scheduled run still only reports the release state.
 
 The Snapcraft build service performs the builds. GitHub Actions coordinates the
 release and does not build or upload `.snap` files itself.
